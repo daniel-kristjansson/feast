@@ -1,3 +1,5 @@
+import os
+import shutil
 import tempfile
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -6,9 +8,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+import feast
 from feast.infra.utils.snowflake.snowflake_utils import (
     GetSnowflakeConnection,
     execute_snowflake_statement,
+    package_snowpark_zip,
     parse_private_key_path,
 )
 
@@ -167,3 +171,13 @@ class TestExecuteSnowflakeStatement:
 
         with pytest.raises(Exception, match="Snowflake query failed"):
             execute_snowflake_statement(mock_conn, "SELECT 1")
+
+
+def test_package_snowpark_zip_builds_outside_the_feast_package():
+    copy_path, zip_path = package_snowpark_zip("myproject")
+    try:
+        assert not copy_path.startswith(os.path.dirname(feast.__file__))
+        assert zip_path == f"{copy_path}/feast.zip"
+        assert os.path.exists(zip_path)
+    finally:
+        shutil.rmtree(copy_path)

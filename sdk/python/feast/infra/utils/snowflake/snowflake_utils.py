@@ -6,7 +6,7 @@ import shutil
 import string
 from logging import getLogger
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 
 import pandas as pd
@@ -174,10 +174,7 @@ def snowpark_udf_fingerprint(*extra: str) -> str:
 
 def package_snowpark_zip(project_name) -> Tuple[str, str]:
     path = os.path.dirname(feast.__file__)
-    copy_path = path + f"/snowflake_feast_{project_name}"
-
-    if os.path.exists(copy_path):
-        shutil.rmtree(copy_path)
+    copy_path = mkdtemp(prefix=f"snowflake_feast_{project_name}_")
 
     package_path = copy_path + "/feast"
     for feast_file in SNOWPARK_ZIP_FILES:
