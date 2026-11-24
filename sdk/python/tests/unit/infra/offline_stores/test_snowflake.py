@@ -1,6 +1,8 @@
 import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -10,6 +12,7 @@ from feast import FeatureView, Field, FileSource
 from feast.infra.offline_stores.snowflake import (
     SnowflakeOfflineStoreConfig,
     SnowflakeRetrievalJob,
+    _feature_table_timestamp_bounds,
 )
 from feast.infra.offline_stores.snowflake_source import SnowflakeSource
 from feast.infra.online_stores.sqlite import SqliteOnlineStoreConfig
@@ -137,3 +140,13 @@ def test_snowflake_source_integer_column_types(
     )
 
     assert list(source.get_table_column_names_and_types(config)) == [("ID", expected)]
+
+
+def test_feature_table_timestamp_bounds_subtract_ttl_in_elapsed_time():
+    # Noon in New York on the day clocks spring forward is 16:00 UTC.
+    entity_ts = datetime(2025, 3, 9, 12, tzinfo=ZoneInfo("America/New_York"))
+
+    min_ts, max_ts = _feature_table_timestamp_bounds((entity_ts, entity_ts))
+
+    assert min_ts - timedelta(days=1) == datetime(2025, 3, 8, 16, tzinfo=timezone.utc)
+    assert max_ts == entity_ts + timedelta(milliseconds=1)
