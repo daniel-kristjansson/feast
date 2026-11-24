@@ -3,7 +3,7 @@ import json
 import os
 import uuid
 import warnings
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import reduce
 from pathlib import Path
@@ -372,7 +372,12 @@ class SnowflakeOfflineStore(OfflineStore):
                 feature_views,
                 registry,
                 project,
-                entity_df_event_timestamp_range,
+                # Widen the upper bound so the feature table filter keeps
+                # entity timestamps finer than a microsecond.
+                (
+                    entity_df_event_timestamp_range[0],
+                    entity_df_event_timestamp_range[1] + timedelta(milliseconds=1),
+                ),
             )
 
             query_context = _fix_entity_selections_identifiers(query_context)
@@ -1411,6 +1416,11 @@ WITH "entity_dataframe" AS (
             "{{ feature }}" as {% if full_feature_names %}"{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}"{% else %}"{{ featureview.field_mapping.get(feature, feature) }}"{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
     FROM {{ featureview.table_subquery }}
+    WHERE
+        "{{ featureview.timestamp_field }}" <= TIMESTAMP '{{ featureview.max_event_timestamp }}'
+    {% if featureview.ttl %}
+        AND "{{ featureview.timestamp_field }}" >= TIMESTAMP '{{ featureview.min_event_timestamp }}'
+    {% endif %}
 ),
 
 /*
