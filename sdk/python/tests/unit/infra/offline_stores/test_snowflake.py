@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
@@ -10,6 +11,7 @@ from feast import FeatureView, Field, FileSource
 from feast.infra.offline_stores.snowflake import (
     SnowflakeOfflineStoreConfig,
     SnowflakeRetrievalJob,
+    _get_feature_table_timestamp_bounds,
 )
 from feast.infra.offline_stores.snowflake_source import SnowflakeSource
 from feast.infra.online_stores.sqlite import SqliteOnlineStoreConfig
@@ -137,3 +139,39 @@ def test_snowflake_source_integer_column_types(
     )
 
     assert list(source.get_table_column_names_and_types(config)) == [("ID", expected)]
+
+
+FALLBACK_RANGE = (
+    datetime(2000, 1, 1, tzinfo=timezone.utc),
+    datetime(2000, 1, 2, tzinfo=timezone.utc),
+)
+
+
+def _timestamp_bounds(row):
+    conn = MagicMock()
+    with patch(
+        "feast.infra.offline_stores.snowflake.execute_snowflake_statement"
+    ) as execute:
+        execute.return_value.fetchone.return_value = row
+        bounds = _get_feature_table_timestamp_bounds(
+            conn, "entity_table", "event_timestamp", FALLBACK_RANGE
+        )
+    execute.assert_called_once_with(
+        conn,
+        'SELECT MIN("event_timestamp"), MAX("event_timestamp") FROM "entity_table"',
+    )
+    return bounds
+
+
+def test_feature_table_timestamp_bounds_come_from_uploaded_entity_table():
+    min_ts = datetime(2024, 3, 9, 16, 0, tzinfo=timezone.utc)
+    max_ts = datetime(2024, 3, 10, 16, 0, 0, 123456, tzinfo=timezone.utc)
+
+    assert _timestamp_bounds((min_ts, max_ts)) == (
+        min_ts,
+        max_ts + timedelta(microseconds=1),
+    )
+
+
+def test_feature_table_timestamp_bounds_fall_back_for_empty_entity_table():
+    assert _timestamp_bounds((None, None)) == FALLBACK_RANGE

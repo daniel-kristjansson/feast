@@ -3,7 +3,7 @@ import json
 import os
 import uuid
 import warnings
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import reduce
 from pathlib import Path
@@ -372,7 +372,12 @@ class SnowflakeOfflineStore(OfflineStore):
                 feature_views,
                 registry,
                 project,
-                entity_df_event_timestamp_range,
+                _get_feature_table_timestamp_bounds(
+                    snowflake_conn,
+                    table_name,
+                    entity_df_event_timestamp_col,
+                    entity_df_event_timestamp_range,
+                ),
             )
 
             query_context = _fix_entity_selections_identifiers(query_context)
@@ -1357,6 +1362,34 @@ def _get_entity_df_event_timestamp_range(
     return entity_df_event_timestamp_range
 
 
+def _get_feature_table_timestamp_bounds(
+    snowflake_conn: SnowflakeConnection,
+    table_name: str,
+    entity_df_event_timestamp_col: str,
+    fallback_range: Tuple[datetime, datetime],
+) -> Tuple[datetime, datetime]:
+    """Return the timestamp range that bounds the feature table scan in the
+    point-in-time join.
+
+    The range is read from the uploaded entity table, which is what the join
+    reads, rather than from the entity dataframe or SQL before upload. The
+    connector returns naive or fixed-offset timestamps, so subtracting a TTL
+    counts elapsed time, as the join's TTL filter does. It returns microsecond
+    precision, so the upper bound is moved up by one microsecond to cover
+    nanosecond entity timestamps. If the table is empty, ``fallback_range`` is
+    returned.
+    """
+    query = (
+        f'SELECT MIN("{entity_df_event_timestamp_col}"), '
+        f'MAX("{entity_df_event_timestamp_col}") FROM "{table_name}"'
+    )
+    row = execute_snowflake_statement(snowflake_conn, query).fetchone()
+    if not row or row[0] is None or row[1] is None:
+        return fallback_range
+    min_ts, max_ts = cast(Tuple[datetime, datetime], row)
+    return min_ts, max_ts + timedelta(microseconds=1)
+
+
 MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
 /*
  0. Compute a deterministic hash for the `left_table_query_string` that will be used throughout
@@ -1411,6 +1444,11 @@ WITH "entity_dataframe" AS (
             "{{ feature }}" as {% if full_feature_names %}"{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}"{% else %}"{{ featureview.field_mapping.get(feature, feature) }}"{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
     FROM {{ featureview.table_subquery }}
+    WHERE
+        "{{ featureview.timestamp_field }}" <= TIMESTAMP '{{ featureview.max_event_timestamp }}'
+    {% if featureview.ttl %}
+        AND "{{ featureview.timestamp_field }}" >= TIMESTAMP '{{ featureview.min_event_timestamp }}'
+    {% endif %}
 ),
 
 /*
